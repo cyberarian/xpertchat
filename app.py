@@ -2,10 +2,17 @@ import streamlit as st
 from groq import Groq
 import os
 
-# Initialize Groq client
-client = Groq(
-    api_key="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",  # Replace with your actual Groq API key
-)
+# Initialize Groq client with API key from secrets
+try:
+    client = Groq(
+        api_key=st.secrets["GROQ_API_KEY"],
+    )
+except KeyError:
+    st.error("🔑 Groq API key not found in secrets. Please add your API key to secrets.toml")
+    st.stop()
+except Exception as e:
+    st.error(f"❌ Error initializing Groq client: {str(e)}")
+    st.stop()
 
 EXPERT_AREAS = {
     "Computer Science": "algorithms, programming languages, software engineering, artificial intelligence",
@@ -26,12 +33,9 @@ EXPERT_PROMPTS = {
 
 GROQ_MODELS = [
     "gemma2-9b-it",
-    "gemma-7b-it",
-    "llama-3.1-8b-instant",
-    "llama3-groq-70b-8192-tool-use-preview",
-    "llama3-groq-8b-8192-tool-use-preview",
-    "llama3-70b-8192",
-    "llama3-70b-4096",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "llama-3.3-70b-versatile",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
     "mixtral-8x7b-32768",    
 ]
 
@@ -57,65 +61,80 @@ HOW_IT_WORKS = {
     ]
 }
 
-def generate_response_with_groq(question, expert_area, model, language):
-    system_prompt = EXPERT_PROMPTS[expert_area]
-    system_prompt += f"\n\nYour task is to generate a comprehensive answer to the given question, embodying the expertise and knowledge of a {expert_area} specialist. The answer should be only in {'Indonesian (Bahasa Indonesia)' if language == 'id' else 'English'}."
-
-    chat_completion = client.chat.completions.create(
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": f"Answer the following question as an expert in {expert_area}: {question}"
-            }
-        ],
-        model=model,
-        temperature=0.3,
-        max_tokens=500,
-        top_p=1,
-        stream=False,
-    )
-    return chat_completion.choices[0].message.content
-
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def generate_expert_info(expert_area, model, language):
+    """Generate expert information with caching to improve performance"""
     system_prompt = "You are a knowledgeable expert with a deep understanding of various academic fields. Provide concise, informative responses about different areas of expertise."
     user_prompt = f"Generate a single, concise sentence about the field of {expert_area}, focusing on its significance and key areas of study. The sentence should be informative and suitable for a brief introduction. Respond only in {'Indonesian' if language == 'id' else 'English'}."
 
-    chat_completion = client.chat.completions.create(
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_prompt
-            }
-        ],
-        model=model,
-        temperature=0.3,
-        max_tokens=500,
-        top_p=1,
-        stream=False,
-    )
-    return chat_completion.choices[0].message.content.strip()
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
+            ],
+            model=model,
+            temperature=0.3,
+            max_tokens=500,
+            top_p=1,
+            stream=False,
+        )
+        return chat_completion.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Error generating expert info: {str(e)}"
+
+def generate_response_with_groq(question, expert_area, model, language):
+    """Generate response from Groq API with error handling"""
+    system_prompt = EXPERT_PROMPTS[expert_area]
+    system_prompt += f"\n\nYour task is to generate a comprehensive answer to the given question, embodying the expertise and knowledge of a {expert_area} specialist. The answer should be only in {'Indonesian (Bahasa Indonesia)' if language == 'id' else 'English'}."
+
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": f"Answer the following question as an expert in {expert_area}: {question}"
+                }
+            ],
+            model=model,
+            temperature=0.3,
+            max_tokens=500,
+            top_p=1,
+            stream=False,
+        )
+        return chat_completion.choices[0].message.content
+    except Exception as e:
+        return f"Error generating response: {str(e)}"
 
 def word_count(text):
-    return len(text.split())
+    """Count words in text"""
+    return len(text.split()) if text else 0
 
 def main():
-    st.set_page_config(page_title="ExpertChat, Your Academic Companion", layout="wide")
+    st.set_page_config(
+        page_title="ExpertChat, Your Academic Companion", 
+        layout="wide",
+        page_icon="🎓"
+    )
 
     # Sidebar
-    st.sidebar.title("Settings")
+    st.sidebar.title("⚙️ Settings")
     selected_model = st.sidebar.selectbox("Select Groq Model", GROQ_MODELS, index=0)
     selected_language = st.sidebar.selectbox("Select Language", list(LANGUAGES.keys()), index=0)
     language_code = LANGUAGES[selected_language]
     
-    st.sidebar.title("How it works" if language_code == "en" else "Cara kerja")
+    st.sidebar.markdown("---")
+    st.sidebar.title("ℹ️ " + ("How it works" if language_code == "en" else "Cara kerja"))
     for step in HOW_IT_WORKS[language_code]:
         st.sidebar.write(step)
 
@@ -126,27 +145,63 @@ def main():
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        expert_area = st.selectbox("Choose an area of expertise:" if language_code == "en" else "Pilih bidang keahlian:", list(EXPERT_AREAS.keys()))
-        question = st.text_area("Enter your question (up to 50 words):" if language_code == "en" else "Masukkan pertanyaan Anda (maksimal 50 kata):", height=100, max_chars=500, help="Provide a clear and specific question related to the chosen field of expertise (max 50 words)." if language_code == "en" else "Berikan pertanyaan yang jelas dan spesifik terkait bidang keahlian yang dipilih (maksimal 50 kata).")
+        expert_area = st.selectbox(
+            "Choose an area of expertise:" if language_code == "en" else "Pilih bidang keahlian:", 
+            list(EXPERT_AREAS.keys())
+        )
+        
+        question = st.text_area(
+            "Enter your question (up to 50 words):" if language_code == "en" else "Masukkan pertanyaan Anda (maksimal 50 kata):", 
+            height=100, 
+            max_chars=500, 
+            help="Provide a clear and specific question related to the chosen field of expertise (max 50 words)." if language_code == "en" else "Berikan pertanyaan yang jelas dan spesifik terkait bidang keahlian yang dipilih (maksimal 50 kata)."
+        )
+        
         word_count_question = word_count(question)
-        st.write(f"Word count: {word_count_question}/50" if language_code == "en" else f"Jumlah kata: {word_count_question}/50")
+        
+        # Color-coded word count
+        if word_count_question > 50:
+            st.error(f"Word count: {word_count_question}/50 - Too many words!" if language_code == "en" else f"Jumlah kata: {word_count_question}/50 - Terlalu banyak kata!")
+        elif word_count_question > 40:
+            st.warning(f"Word count: {word_count_question}/50" if language_code == "en" else f"Jumlah kata: {word_count_question}/50")
+        else:
+            st.info(f"Word count: {word_count_question}/50" if language_code == "en" else f"Jumlah kata: {word_count_question}/50")
 
     with col2:
-        st.markdown("### About the Expertise" if language_code == "en" else "### Tentang Keahlian")
+        st.markdown("### 💡 " + ("About the Expertise" if language_code == "en" else "Tentang Keahlian"))
         expert_info = generate_expert_info(expert_area, selected_model, language_code)
         st.info(expert_info)
+        
+        # Show areas covered
+        st.markdown("**" + ("Areas covered:" if language_code == "en" else "Area yang dicakup:") + "**")
+        st.caption(EXPERT_AREAS[expert_area])
 
-    if st.button("Get Expert Answer" if language_code == "en" else "Dapatkan Jawaban Ahli", type="primary"):
-        if not question:
-            st.warning("Please enter a question." if language_code == "en" else "Mohon masukkan pertanyaan.")
+    # Generate button with improved validation
+    if st.button("🚀 " + ("Get Expert Answer" if language_code == "en" else "Dapatkan Jawaban Ahli"), type="primary"):
+        if not question.strip():
+            st.warning("⚠️ " + ("Please enter a question." if language_code == "en" else "Mohon masukkan pertanyaan."))
         elif word_count_question > 50:
-            st.warning("Please limit your question to 50 words or less." if language_code == "en" else "Mohon batasi pertanyaan Anda hingga 50 kata atau kurang.")
+            st.error("❌ " + ("Please limit your question to 50 words or less." if language_code == "en" else "Mohon batasi pertanyaan Anda hingga 50 kata atau kurang."))
         else:
-            with st.spinner("Generating expert response..." if language_code == "en" else "Menghasilkan respons ahli..."):
+            with st.spinner("🤔 " + ("Generating expert response..." if language_code == "en" else "Menghasilkan respons ahli...")):
                 response = generate_response_with_groq(question, expert_area, selected_model, language_code)
-                st.success("Expert response ready!" if language_code == "en" else "Respons ahli siap!")
-                st.markdown("### Expert Answer" if language_code == "en" else "### Jawaban Ahli")
-                st.markdown(response)
+                
+                if response.startswith("Error"):
+                    st.error("❌ " + response)
+                else:
+                    st.success("✅ " + ("Expert response ready!" if language_code == "en" else "Respons ahli siap!"))
+                    st.markdown("### 🎯 " + ("Expert Answer" if language_code == "en" else "Jawaban Ahli"))
+                    st.markdown(response)
+                    
+                    # Add feedback section
+                    st.markdown("---")
+                    col1, col2, col3 = st.columns([1, 1, 2])
+                    with col1:
+                        if st.button("👍 Helpful" if language_code == "en" else "👍 Membantu"):
+                            st.success("Thank you for your feedback!" if language_code == "en" else "Terima kasih atas masukan Anda!")
+                    with col2:
+                        if st.button("👎 Not helpful" if language_code == "en" else "👎 Tidak membantu"):
+                            st.info("We'll work to improve our responses." if language_code == "en" else "Kami akan berusaha meningkatkan respons kami.")
 
     # Footer
     st.markdown("---")
